@@ -15,13 +15,13 @@ CLIPROXY_API_URL = os.getenv("CLIPROXY_API_URL", "http://localhost:8080/v1/chat/
 # Council members - model identifiers for CLIProxyAPIPlus
 # Format depends on your CLIProxyAPIPlus configuration
 COUNCIL_MODELS = [
-    "gpt-4o",              # OpenAI via CLIProxyAPIPlus
-    "gemini-2.0-flash",    # Google via CLIProxyAPIPlus
-    "claude-sonnet-4-5",   # Anthropic via CLIProxyAPIPlus
+    "openai/gpt-5.2",
+    "google/gemini-3-pro-preview",
+    "anthropic/claude-sonnet-4.5",
 ]
 
 # Chairman model - synthesizes final response
-CHAIRMAN_MODEL = "gpt-4o"
+CHAIRMAN_MODEL = "openai/gpt-5.2"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"

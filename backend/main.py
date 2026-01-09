@@ -10,6 +10,11 @@ import json
 import asyncio
 import subprocess
 import httpx
+import platform
+import urllib.request
+import tarfile
+import zipfile
+import os
 from pathlib import Path
 
 from . import storage
@@ -21,12 +26,191 @@ app = FastAPI(title="LLM Council API")
 # Track proxy process
 _proxy_process = None
 
+# Proxy configuration
+PROXY_DIR = Path(__file__).parent.parent / "cliproxy"
+RELEASE_URL = "https://github.com/router-for-me/CLIProxyAPIPlus/releases/latest/download"
+
+
+def get_platform_binary():
+    """Get the appropriate binary name for the current platform."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    if machine in ("x86_64", "amd64"):
+        arch = "amd64"
+    elif machine in ("arm64", "aarch64"):
+        arch = "arm64"
+    else:
+        arch = machine
+
+    if system == "darwin":
+        return f"cliproxy-darwin-{arch}.tar.gz"
+    elif system == "linux":
+        return f"cliproxy-linux-{arch}.tar.gz"
+    elif system == "windows":
+        return f"cliproxy-windows-{arch}.zip"
+    return None
+
+
+def get_binary_path():
+    """Get path to the proxy binary."""
+    if platform.system() == "Windows":
+        return PROXY_DIR / "cliproxy.exe"
+    return PROXY_DIR / "cliproxy"
+
+
+def download_proxy_binary():
+    """Download pre-built binary for current platform."""
+    PROXY_DIR.mkdir(parents=True, exist_ok=True)
+
+    binary_name = get_platform_binary()
+    if not binary_name:
+        print(f"Error: Unsupported platform {platform.system()} {platform.machine()}")
+        return False
+
+    binary_path = get_binary_path()
+    if binary_path.exists():
+        return True
+
+    url = f"{RELEASE_URL}/{binary_name}"
+    archive_path = PROXY_DIR / binary_name
+
+    print(f"Downloading CLIProxyAPIPlus ({binary_name})...")
+    try:
+        urllib.request.urlretrieve(url, archive_path)
+        print("Download complete!")
+
+        print("Extracting...")
+        if binary_name.endswith(".tar.gz"):
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(PROXY_DIR)
+        elif binary_name.endswith(".zip"):
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(PROXY_DIR)
+
+        if platform.system() != "Windows":
+            os.chmod(binary_path, 0o755)
+
+        archive_path.unlink()
+        print(f"Binary ready at {binary_path}")
+        return True
+
+    except Exception as e:
+        print(f"Error downloading binary: {e}")
+        return False
+
+
+def setup_proxy_config():
+    """Create default config if not present."""
+    config_path = PROXY_DIR / "config.yaml"
+    if config_path.exists():
+        return True
+
+    config = """# CLIProxyAPIPlus Configuration for LLM Council
+server:
+  port: 8080
+
+providers:
+  openai:
+    enabled: true
+  gemini:
+    enabled: true
+  claude:
+    enabled: true
+"""
+    PROXY_DIR.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(config)
+    return True
+
+
+def run_oauth_login(provider: str):
+    """Run OAuth login for a specific provider."""
+    binary = get_binary_path()
+    if not binary.exists():
+        return False
+
+    print(f"\nStarting OAuth login for {provider}...")
+    print("A browser window will open for authentication.")
+    try:
+        subprocess.run(
+            [str(binary), "login", provider],
+            cwd=PROXY_DIR,
+            check=True
+        )
+        print(f"Successfully authenticated with {provider}!")
+        return True
+    except subprocess.CalledProcessError:
+        print(f"OAuth login for {provider} failed or was cancelled.")
+        return False
+
+
+def check_provider_auth(provider: str) -> bool:
+    """Check if a provider has OAuth tokens stored."""
+    auth_file = PROXY_DIR / "auths" / f"{provider}.json"
+    return auth_file.exists()
+
+
+def interactive_setup():
+    """Run interactive setup menu for CLIProxyAPIPlus."""
+    print("\n" + "="*60)
+    print("  LLM Council - First Time Setup")
+    print("="*60)
+
+    # Step 1: Download binary
+    binary = get_binary_path()
+    if not binary.exists():
+        print("\n[1/3] Setting up CLIProxyAPIPlus...")
+        if not download_proxy_binary():
+            print("Failed to download proxy. Please try manually.")
+            return False
+    else:
+        print("\n[1/3] CLIProxyAPIPlus binary found.")
+
+    # Step 2: Setup config
+    print("\n[2/3] Checking configuration...")
+    setup_proxy_config()
+    print("Configuration ready.")
+
+    # Step 3: OAuth login for each provider
+    print("\n[3/3] Provider Authentication")
+    print("-" * 40)
+
+    providers = [
+        ("openai", "OpenAI (GPT models)"),
+        ("gemini", "Google (Gemini models)"),
+        ("claude", "Anthropic (Claude models)"),
+    ]
+
+    for provider_id, provider_name in providers:
+        if check_provider_auth(provider_id):
+            print(f"  {provider_name}: Already authenticated")
+        else:
+            while True:
+                response = input(f"\n  Set up {provider_name}? [y/n/skip all]: ").lower().strip()
+                if response == 'y':
+                    run_oauth_login(provider_id)
+                    break
+                elif response == 'n':
+                    print(f"  Skipping {provider_name}")
+                    break
+                elif response == 'skip all':
+                    print("  Skipping remaining providers...")
+                    break
+            if response == 'skip all':
+                break
+
+    print("\n" + "="*60)
+    print("  Setup Complete!")
+    print("="*60)
+    print("\nYou can re-run provider setup anytime with:")
+    print("  python backend/start_proxy.py login --provider <name>\n")
+    return True
+
 
 async def check_proxy_running() -> bool:
     """Check if CLIProxyAPIPlus is responding."""
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            # Try to hit the proxy endpoint
             base_url = CLIPROXY_API_URL.rsplit('/v1/', 1)[0]
             response = await client.get(f"{base_url}/health")
             return response.status_code == 200
@@ -38,17 +222,14 @@ def start_proxy():
     """Start CLIProxyAPIPlus if binary exists."""
     global _proxy_process
 
-    proxy_dir = Path(__file__).parent.parent / "cliproxy"
-    binary = proxy_dir / "cliproxy"
-
+    binary = get_binary_path()
     if not binary.exists():
-        print("Warning: CLIProxyAPIPlus not found. Run 'python backend/start_proxy.py setup' first.")
         return False
 
     print("Starting CLIProxyAPIPlus...")
     _proxy_process = subprocess.Popen(
         [str(binary), "server"],
-        cwd=proxy_dir,
+        cwd=PROXY_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT
     )
@@ -56,12 +237,33 @@ def start_proxy():
     return True
 
 
+def ensure_proxy_setup():
+    """Ensure proxy is set up, running interactive setup if needed."""
+    binary = get_binary_path()
+
+    # Check if binary exists
+    if not binary.exists():
+        print("\nCLIProxyAPIPlus not found. Starting setup...")
+        interactive_setup()
+        return
+
+    # Check if any providers are authenticated
+    has_any_auth = any(
+        check_provider_auth(p) for p in ["openai", "gemini", "claude"]
+    )
+
+    if not has_any_auth:
+        print("\nNo provider authentication found.")
+        response = input("Run setup wizard? [y/n]: ").lower().strip()
+        if response == 'y':
+            interactive_setup()
+
+
 @app.on_event("startup")
 async def startup_event():
     """Start proxy on app startup if not already running."""
     if not await check_proxy_running():
         start_proxy()
-        # Give it a moment to start
         await asyncio.sleep(1)
         if await check_proxy_running():
             print("CLIProxyAPIPlus is ready")
@@ -263,4 +465,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Check setup before starting
+    ensure_proxy_setup()
+
+    print("\nStarting LLM Council API on http://localhost:8001")
     uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -18,7 +18,7 @@ COUNCIL_MODELS = [
     "openai/gpt-5.2",
     "google/gemini-3-pro-preview",
     "anthropic/claude-sonnet-4.5",
-    "anthropic/claude-haiku-3.5",
+    "anthropic/claude-haiku-4",
 ]
 
 # Chairman model - synthesizes final response

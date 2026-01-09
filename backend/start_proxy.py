@@ -7,83 +7,105 @@ Run this before starting the LLM Council backend.
 import os
 import sys
 import subprocess
+import platform
+import urllib.request
+import zipfile
+import tarfile
 import shutil
 from pathlib import Path
 
 # Configuration
 PROXY_DIR = Path(__file__).parent.parent / "cliproxy"
-PROXY_REPO = "https://github.com/router-for-me/CLIProxyAPIPlus"
 PROXY_PORT = 8080
+RELEASE_URL = "https://github.com/router-for-me/CLIProxyAPIPlus/releases/latest/download"
 
 
-def check_go_installed():
-    """Check if Go is installed."""
-    if shutil.which("go") is None:
-        print("Error: Go is not installed. Please install Go first:")
-        print("  https://go.dev/doc/install")
+def get_platform_binary():
+    """Get the appropriate binary name for the current platform."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    if machine in ("x86_64", "amd64"):
+        arch = "amd64"
+    elif machine in ("arm64", "aarch64"):
+        arch = "arm64"
+    else:
+        arch = machine
+
+    if system == "darwin":
+        return f"cliproxy-darwin-{arch}.tar.gz"
+    elif system == "linux":
+        return f"cliproxy-linux-{arch}.tar.gz"
+    elif system == "windows":
+        return f"cliproxy-windows-{arch}.zip"
+    else:
+        return None
+
+
+def download_binary():
+    """Download pre-built binary for current platform."""
+    PROXY_DIR.mkdir(parents=True, exist_ok=True)
+
+    binary_name = get_platform_binary()
+    if not binary_name:
+        print(f"Error: Unsupported platform {platform.system()} {platform.machine()}")
         return False
-    return True
 
+    binary_path = PROXY_DIR / "cliproxy"
+    if platform.system() == "Windows":
+        binary_path = PROXY_DIR / "cliproxy.exe"
 
-def clone_proxy():
-    """Clone CLIProxyAPIPlus repository if not present."""
-    if PROXY_DIR.exists():
-        print(f"CLIProxyAPIPlus already exists at {PROXY_DIR}")
+    if binary_path.exists():
+        print(f"Binary already exists at {binary_path}")
         return True
 
-    print(f"Cloning CLIProxyAPIPlus to {PROXY_DIR}...")
+    url = f"{RELEASE_URL}/{binary_name}"
+    archive_path = PROXY_DIR / binary_name
+
+    print(f"Downloading {binary_name}...")
     try:
-        subprocess.run(
-            ["git", "clone", PROXY_REPO, str(PROXY_DIR)],
-            check=True
-        )
-        print("Clone successful!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error cloning repository: {e}")
-        return False
+        urllib.request.urlretrieve(url, archive_path)
+        print("Download complete!")
 
+        # Extract archive
+        print("Extracting...")
+        if binary_name.endswith(".tar.gz"):
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(PROXY_DIR)
+        elif binary_name.endswith(".zip"):
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(PROXY_DIR)
 
-def build_proxy():
-    """Build the CLIProxyAPIPlus binary."""
-    print("Building CLIProxyAPIPlus...")
-    try:
-        subprocess.run(
-            ["go", "build", "-o", "cliproxy", "./cmd/server"],
-            cwd=PROXY_DIR,
-            check=True
-        )
-        print("Build successful!")
+        # Make executable on Unix
+        if platform.system() != "Windows":
+            os.chmod(binary_path, 0o755)
+
+        # Clean up archive
+        archive_path.unlink()
+        print(f"Binary ready at {binary_path}")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error building proxy: {e}")
+
+    except Exception as e:
+        print(f"Error downloading binary: {e}")
+        print("\nManual install: Download from https://github.com/router-for-me/CLIProxyAPIPlus/releases")
         return False
 
 
 def setup_config():
     """Create default config if not present."""
     config_path = PROXY_DIR / "config.yaml"
-    example_config = PROXY_DIR / "config.example.yaml"
 
     if config_path.exists():
         print(f"Config already exists at {config_path}")
         return True
 
-    if example_config.exists():
-        shutil.copy(example_config, config_path)
-        print(f"Created config from example at {config_path}")
-        print("Please edit config.yaml to add your provider credentials.")
-        return True
-
-    # Create minimal config
-    minimal_config = """# CLIProxyAPIPlus Configuration
-# See https://github.com/router-for-me/CLIProxyAPIPlus for full options
-
+    # Create config for LLM Council
+    config = """# CLIProxyAPIPlus Configuration for LLM Council
 server:
   port: 8080
 
-# Add your provider configurations below
-# OAuth login will be handled interactively
+# Provider configurations
+# OAuth tokens will be stored in auths/ directory after login
 
 providers:
   openai:
@@ -93,16 +115,24 @@ providers:
   claude:
     enabled: true
 """
-    config_path.write_text(minimal_config)
-    print(f"Created minimal config at {config_path}")
+    PROXY_DIR.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(config)
+    print(f"Created config at {config_path}")
     return True
+
+
+def get_binary_path():
+    """Get path to the binary."""
+    if platform.system() == "Windows":
+        return PROXY_DIR / "cliproxy.exe"
+    return PROXY_DIR / "cliproxy"
 
 
 def run_oauth_login(provider: str):
     """Run OAuth login for a specific provider."""
-    binary = PROXY_DIR / "cliproxy"
+    binary = get_binary_path()
     if not binary.exists():
-        print("Error: Proxy binary not found. Run build first.")
+        print("Error: Binary not found. Run 'setup' first.")
         return False
 
     print(f"\nStarting OAuth login for {provider}...")
@@ -122,9 +152,9 @@ def run_oauth_login(provider: str):
 
 def start_proxy():
     """Start the proxy server."""
-    binary = PROXY_DIR / "cliproxy"
+    binary = get_binary_path()
     if not binary.exists():
-        print("Error: Proxy binary not found. Run setup first.")
+        print("Error: Binary not found. Run 'setup' first.")
         return None
 
     print(f"\nStarting CLIProxyAPIPlus on port {PROXY_PORT}...")
@@ -153,37 +183,31 @@ def main():
     parser.add_argument(
         "command",
         choices=["setup", "login", "start", "all"],
-        help="Command to run: setup (clone+build), login (OAuth), start (run server), all (full setup)"
+        help="Command: setup (download binary), login (OAuth), start (run server), all (full setup)"
     )
     parser.add_argument(
         "--provider",
         choices=["openai", "gemini", "claude", "copilot", "kiro"],
-        help="Provider for OAuth login (required for 'login' command)"
+        help="Provider for OAuth login"
     )
 
     args = parser.parse_args()
 
     if args.command == "setup" or args.command == "all":
-        if not check_go_installed():
-            sys.exit(1)
-        if not clone_proxy():
-            sys.exit(1)
-        if not build_proxy():
+        if not download_binary():
             sys.exit(1)
         if not setup_config():
             sys.exit(1)
-        print("\n✓ Setup complete!")
+        print("\n Setup complete!")
 
     if args.command == "login":
         if not args.provider:
-            print("Error: --provider is required for login command")
+            print("Error: --provider required")
             print("Example: python start_proxy.py login --provider openai")
             sys.exit(1)
-        if not run_oauth_login(args.provider):
-            sys.exit(1)
+        run_oauth_login(args.provider)
 
     if args.command == "all":
-        # Run OAuth for all main providers
         for provider in ["openai", "gemini", "claude"]:
             response = input(f"\nSet up OAuth for {provider}? [y/N] ")
             if response.lower() == 'y':
@@ -192,7 +216,7 @@ def main():
     if args.command == "start" or args.command == "all":
         process = start_proxy()
         if process:
-            print("\nProxy is running. Press Ctrl+C to stop.")
+            print("\nProxy running. Press Ctrl+C to stop.")
             try:
                 process.wait()
             except KeyboardInterrupt:

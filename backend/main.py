@@ -150,11 +150,18 @@ def check_provider_auth(provider: str) -> bool:
     return auth_file.exists()
 
 
+def count_authenticated_providers():
+    """Count how many providers are authenticated."""
+    return sum(1 for p in ["openai", "gemini", "claude"] if check_provider_auth(p))
+
+
 def interactive_setup():
     """Run interactive setup menu for CLIProxyAPIPlus."""
     print("\n" + "="*60)
     print("  LLM Council - First Time Setup")
     print("="*60)
+    print("\n  Note: You need at least 2 providers for the council")
+    print("        (minimum 2 council members + chairman)")
 
     # Step 1: Download binary
     binary = get_binary_path()
@@ -174,6 +181,8 @@ def interactive_setup():
     # Step 3: OAuth login for each provider
     print("\n[3/3] Provider Authentication")
     print("-" * 40)
+    print("  Set up the providers you want to use.")
+    print("  Minimum 2 required, but more = better council diversity.\n")
 
     providers = [
         ("openai", "OpenAI (GPT models)"),
@@ -186,7 +195,9 @@ def interactive_setup():
             print(f"  {provider_name}: Already authenticated")
         else:
             while True:
-                response = input(f"\n  Set up {provider_name}? [y/n/skip all]: ").lower().strip()
+                auth_count = count_authenticated_providers()
+                prompt = f"\n  Set up {provider_name}? [y/n/skip all]: "
+                response = input(prompt).lower().strip()
                 if response == 'y':
                     run_oauth_login(provider_id)
                     break
@@ -198,6 +209,19 @@ def interactive_setup():
                     break
             if response == 'skip all':
                 break
+
+    # Check minimum requirements
+    auth_count = count_authenticated_providers()
+    print("\n" + "-" * 40)
+    print(f"  Providers authenticated: {auth_count}/3")
+
+    if auth_count < 2:
+        print("\n  Warning: Less than 2 providers set up!")
+        print("  The council needs at least 2 members to function properly.")
+        print("  You can add more providers later with:")
+        print("    python backend/start_proxy.py login --provider <name>")
+    else:
+        print(f"  Council ready with {auth_count} members.")
 
     print("\n" + "="*60)
     print("  Setup Complete!")
@@ -247,16 +271,21 @@ def ensure_proxy_setup():
         interactive_setup()
         return
 
-    # Check if any providers are authenticated
-    has_any_auth = any(
-        check_provider_auth(p) for p in ["openai", "gemini", "claude"]
-    )
+    # Check how many providers are authenticated
+    auth_count = count_authenticated_providers()
 
-    if not has_any_auth:
+    if auth_count == 0:
         print("\nNo provider authentication found.")
         response = input("Run setup wizard? [y/n]: ").lower().strip()
         if response == 'y':
             interactive_setup()
+    elif auth_count == 1:
+        print(f"\nOnly 1 provider authenticated. Council needs at least 2.")
+        response = input("Run setup wizard to add more? [y/n]: ").lower().strip()
+        if response == 'y':
+            interactive_setup()
+        else:
+            print("Warning: Council may not function properly with only 1 provider.")
 
 
 @app.on_event("startup")

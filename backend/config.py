@@ -13,7 +13,8 @@ CLIPROXY_API_KEY = os.getenv("CLIPROXY_API_KEY", "")
 CLIPROXY_API_URL = os.getenv("CLIPROXY_API_URL", "http://localhost:8080/v1/chat/completions")
 
 # Council members - model identifiers for CLIProxyAPIPlus
-# Format depends on your CLIProxyAPIPlus configuration
+# Minimum 2 members required for council deliberation
+# Not all need to be available - council works with graceful degradation
 COUNCIL_MODELS = [
     "openai/gpt-5.2",
     "google/gemini-3-pro-preview",

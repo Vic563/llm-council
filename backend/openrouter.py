@@ -1,8 +1,8 @@
-"""OpenRouter API client for making LLM requests."""
+"""LLM API client for making requests via CLIProxyAPIPlus."""
 
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from .config import CLIPROXY_API_KEY, CLIPROXY_API_URL
 
 
 async def query_model(
@@ -11,10 +11,10 @@ async def query_model(
     timeout: float = 120.0
 ) -> Optional[Dict[str, Any]]:
     """
-    Query a single model via OpenRouter API.
+    Query a single model via CLIProxyAPIPlus (OpenAI-compatible API).
 
     Args:
-        model: OpenRouter model identifier (e.g., "openai/gpt-4o")
+        model: Model identifier (e.g., "gpt-4o", "claude-sonnet-4-5")
         messages: List of message dicts with 'role' and 'content'
         timeout: Request timeout in seconds
 
@@ -22,9 +22,12 @@ async def query_model(
         Response dict with 'content' and optional 'reasoning_details', or None if failed
     """
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
     }
+
+    # Add authorization header only if API key is configured
+    if CLIPROXY_API_KEY:
+        headers["Authorization"] = f"Bearer {CLIPROXY_API_KEY}"
 
     payload = {
         "model": model,
@@ -34,7 +37,7 @@ async def query_model(
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                OPENROUTER_API_URL,
+                CLIPROXY_API_URL,
                 headers=headers,
                 json=payload
             )
@@ -58,10 +61,10 @@ async def query_models_parallel(
     messages: List[Dict[str, str]]
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
-    Query multiple models in parallel.
+    Query multiple models in parallel via CLIProxyAPIPlus.
 
     Args:
-        models: List of OpenRouter model identifiers
+        models: List of model identifiers
         messages: List of message dicts to send to each model
 
     Returns:

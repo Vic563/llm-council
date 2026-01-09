@@ -8,11 +8,78 @@ from typing import List, Dict, Any
 import uuid
 import json
 import asyncio
+import subprocess
+import httpx
+from pathlib import Path
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .config import CLIPROXY_API_URL
 
 app = FastAPI(title="LLM Council API")
+
+# Track proxy process
+_proxy_process = None
+
+
+async def check_proxy_running() -> bool:
+    """Check if CLIProxyAPIPlus is responding."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            # Try to hit the proxy endpoint
+            base_url = CLIPROXY_API_URL.rsplit('/v1/', 1)[0]
+            response = await client.get(f"{base_url}/health")
+            return response.status_code == 200
+    except:
+        return False
+
+
+def start_proxy():
+    """Start CLIProxyAPIPlus if binary exists."""
+    global _proxy_process
+
+    proxy_dir = Path(__file__).parent.parent / "cliproxy"
+    binary = proxy_dir / "cliproxy"
+
+    if not binary.exists():
+        print("Warning: CLIProxyAPIPlus not found. Run 'python backend/start_proxy.py setup' first.")
+        return False
+
+    print("Starting CLIProxyAPIPlus...")
+    _proxy_process = subprocess.Popen(
+        [str(binary), "server"],
+        cwd=proxy_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT
+    )
+    print(f"CLIProxyAPIPlus started (PID: {_proxy_process.pid})")
+    return True
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start proxy on app startup if not already running."""
+    if not await check_proxy_running():
+        start_proxy()
+        # Give it a moment to start
+        await asyncio.sleep(1)
+        if await check_proxy_running():
+            print("CLIProxyAPIPlus is ready")
+        else:
+            print("Warning: CLIProxyAPIPlus may not have started correctly")
+    else:
+        print("CLIProxyAPIPlus already running")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop proxy on app shutdown."""
+    global _proxy_process
+    if _proxy_process:
+        print("Stopping CLIProxyAPIPlus...")
+        _proxy_process.terminate()
+        _proxy_process.wait()
+        _proxy_process = None
 
 # Enable CORS for local development
 app.add_middleware(
